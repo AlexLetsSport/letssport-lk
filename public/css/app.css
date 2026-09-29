@@ -815,69 +815,6 @@ input, select {
   border-radius: var(--radius);
 }
 .landing-wrap { max-width: 720px; }
-.demo-hint { margin-top: 18px; color: rgba(255,255,255,.75); font-size: 13px; }
-.demo-accounts {
-  margin-top: 28px;
-  display: grid;
-  gap: 10px;
-}
-.demo-accounts-title {
-  margin: 0;
-  color: #fff;
-  font-size: 18px;
-  font-weight: 400;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-}
-.demo-accounts-lead {
-  margin: 0;
-  color: rgba(255,255,255,.72);
-  font-size: 13px;
-}
-.demo-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: rgba(255,255,255,.14);
-  border: 1px solid rgba(255,255,255,.28);
-  cursor: pointer;
-  color: #fff;
-}
-.demo-row:hover { background: rgba(255,255,255,.22); }
-.demo-row-main {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.demo-row-main strong {
-  font-weight: 500;
-  font-size: 14px;
-}
-.demo-creds {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  color: rgba(255,255,255,.9);
-  user-select: all;
-}
-.demo-row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.demo-btn {
-  min-height: 36px;
-  padding: 8px 12px;
-  font-size: 12px;
-}
-.landing .demo-btn.ghost {
-  background: rgba(255,255,255,.12);
-  color: #fff;
-  border: 1px solid rgba(255,255,255,.35);
-}
 
 .top-slim {
   flex-wrap: nowrap;
@@ -924,6 +861,9 @@ input, select {
 }
 .branch-card small { display: block; margin-top: 8px; color: var(--muted); }
 .center-row { display: flex; justify-content: center; margin: 8px 0 0; }
+.backup-card { margin-top: 18px; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.backup-actions .file-btn { margin-top: 0; cursor: pointer; }
 .family-help {
   margin: 0;
   padding: 10px 12px;

@@ -1,14 +1,13 @@
 const role = sessionStorage.getItem("lk-role") || "";
 const family = sessionStorage.getItem("lk-family") || "";
 const trainer = sessionStorage.getItem("lk-trainer") || "";
+const sessionToken = sessionStorage.getItem("lk-session") || "";
 
-if (!role) location.href = "/";
+if (!role || !sessionToken) location.href = "/";
 
 const headers = () => ({
   "Content-Type": "application/json",
-  "X-Role": role,
-  "X-Family": family,
-  "X-Trainer": trainer
+  "X-Session": sessionToken
 });
 
 const WEEK_ORDER = ["пн", "вт", "ср", "чт", "пт", "сб", "воскр"];
@@ -226,6 +225,31 @@ async function runUndo() {
       showToast("Остаток на начало отменён");
       return;
     }
+    if (entry.type === "child-patch") {
+      const res = await api("/api/children/" + entry.childId, "PATCH", entry.prev);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Не удалось отменить изменение");
+      await load();
+      showToast("Изменение ребёнка отменено");
+      return;
+    }
+    if (entry.type === "family-patch") {
+      const res = await api("/api/families/" + entry.familyId, "PATCH", entry.prev);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Не удалось отменить изменение семьи");
+      await load();
+      if (role === "director" && dirTab === "calc" && calcTab === "parents") await loadPeriods();
+      showToast("Изменение семьи отменено");
+      return;
+    }
+    if (entry.type === "trainer-patch") {
+      const res = await api("/api/trainers/" + entry.trainerId, "PATCH", entry.prev);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Не удалось отменить изменение тренера");
+      await load();
+      showToast("Изменение тренера отменено");
+      return;
+    }
     showToast("Это действие уже нельзя отменить");
   } catch (err) {
     pushUndo(entry);
@@ -277,6 +301,24 @@ function persistCal() {
 
 function api(url, method, body) {
   return fetch(url, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined });
+}
+
+async function downloadProtectedJson(url, fallbackName) {
+  const res = await fetch(url, { headers: headers() });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Не удалось скачать файл");
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/i);
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = match ? match[1] : fallbackName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
 function todayDay() {
@@ -512,7 +554,7 @@ function attTable(opts) {
     const year = state.month.year;
     const months = MONTH_NAMES.map((name, i) => {
       const active = i + 1 === state.month.month;
-      return `<th class="${active ? "is-now" : ""}" data-pick-month="${i + 1}">${name.slice(0, 3)}</th>`;
+      return `<th class="${active ? "is-now is-on" : ""}" data-pick-month="${i + 1}">${name.slice(0, 3)}</th>`;
     }).join("");
     const rows = kids.map((c) => {
       const cells = MONTH_NAMES.map((_, i) => {
@@ -590,6 +632,7 @@ function attendanceScreen() {
     : "";
   return `
     <div class="gcal gcal-table">
+      ${monthSwitch()}
       ${back}
       ${calToolbar(true)}
       ${attTable({ clickable: true, deletable: true, group: g })}
@@ -921,7 +964,7 @@ function parentCombinedAtt(child) {
     const year = state.month.year;
     const head = MONTH_NAMES.map((name, i) => {
       const active = i + 1 === state.month.month;
-      return `<th class="${active ? "is-now" : ""}" data-pick-month="${i + 1}">${name.slice(0, 3)}</th>`;
+      return `<th class="${active ? "is-now is-on" : ""}" data-pick-month="${i + 1}">${name.slice(0, 3)}</th>`;
     }).join("");
     const rows = groups.map((g) => {
       const packLessons = Number(g.packLessons) || 8;
@@ -1026,7 +1069,19 @@ function branchesView() {
     <div class="branch-grid">${cards}</div>
     <div class="center-row">
       <button class="btn" type="button" data-go="trainers">Редактирование тренеров</button>
-    </div>`;
+    </div>
+    ${role === "director" ? `
+      <article class="child-card backup-card">
+        <h2>Резервные копии и доступы</h2>
+        <p class="hint">Скачайте полную базу перед обновлением контейнера. Восстановление полностью заменит текущие данные.</p>
+        <div class="backup-actions">
+          <button class="btn" type="button" data-download-backup>Скачать базу JSON</button>
+          <label class="btn ghost file-btn">Восстановить из JSON
+            <input type="file" accept="application/json,.json" data-restore-backup hidden>
+          </label>
+          <button class="btn ghost" type="button" data-download-access>Выгрузить доступы</button>
+        </div>
+      </article>` : ""}`;
 }
 
 function groupsOfBranch() {
@@ -1138,7 +1193,7 @@ function trainersView() {
       const n = (t.groupIds || []).length;
       return `<button class="sheet-item trainer-list-card" type="button" data-open-trainer="${t.id}">
         <strong>${esc(t.name)}</strong>
-        <span class="sheet-item-branch">логин ${esc(t.login)} · групп: ${n}</span>
+        <span class="sheet-item-branch">${role === "director" ? `логин ${esc(t.login)} · ` : ""}групп: ${n}</span>
       </button>`;
     }).join("");
     return `
@@ -1179,7 +1234,9 @@ function trainersView() {
   return `
     <button class="btn ghost" type="button" data-back-trainers>← ${sportLabel}</button>
     <h2>${esc(t.name)}</h2>
-    <p class="hint">логин ${esc(t.login)} · пароль ${esc(t.password)}</p>
+    ${role === "director"
+      ? `<p class="hint">логин ${esc(t.login)} · пароль ${esc(t.password)}</p>`
+      : `<p class="hint">Доступы к кабинетам выгружает руководитель.</p>`}
     <p class="hint">Сначала выбранные. В названии — филиал. Нажмите на группу, чтобы закрепить или снять.</p>
     <div class="multi multi-pick">${opts || "<p class=\"hint\">Нет групп</p>"}</div>
     <button class="btn" type="button" data-save-trainer="${t.id}">Сохранить группы</button>`;
@@ -1547,10 +1604,11 @@ function familySheetHtml() {
   return `
     <div class="sheet" role="dialog">
       <p class="sheet-kicker">Семья · ${esc(child ? child.name : fam.parentName)}</p>
-      <div class="cred-block">
-        <div><span>логин</span><b>${esc(fam.login)}</b></div>
-        <div><span>пароль</span><b>${esc(fam.password)}</b></div>
-      </div>
+      ${role === "director" ? `
+        <div class="cred-block">
+          <div><span>логин</span><b>${esc(fam.login)}</b></div>
+          <div><span>пароль</span><b>${esc(fam.password)}</b></div>
+        </div>` : ""}
 
       <details class="family-help">
         <summary>Алгоритм семей</summary>
@@ -1587,7 +1645,8 @@ function familySheetHtml() {
 }
 
 
-document.getElementById("logout").addEventListener("click", () => {
+document.getElementById("logout").addEventListener("click", async () => {
+  await fetch("/api/logout", { method: "POST", headers: headers() }).catch(() => {});
   sessionStorage.clear();
   location.href = "/";
 });
@@ -1611,6 +1670,24 @@ document.getElementById("tabs").addEventListener("click", async (e) => {
 });
 
 document.getElementById("app").addEventListener("click", async (e) => {
+  if (e.target.closest("[data-download-backup]")) {
+    try {
+      await downloadProtectedJson("/api/backup", "lk-backup.json");
+      showToast("Резервная копия скачана");
+    } catch (err) {
+      alert(err.message);
+    }
+    return;
+  }
+  if (e.target.closest("[data-download-access]")) {
+    try {
+      await downloadProtectedJson("/api/access-export", "lk-access.json");
+      showToast("Список доступов скачан");
+    } catch (err) {
+      alert(err.message);
+    }
+    return;
+  }
   const cal = e.target.closest("[data-cal]");
   if (cal) { calMode = cal.dataset.cal; persistCal(); render(); return; }
   const monthBtn = e.target.closest("[data-month]");
@@ -1640,6 +1717,7 @@ document.getElementById("app").addEventListener("click", async (e) => {
     calMode = "month";
     persistCal();
     await load();
+    if (role === "director" && dirTab === "calc" && calcTab === "parents") await loadPeriods();
     return;
   }
   if (e.target.closest("[data-open-groups]")) { sheet = { type: "groups", q: "" }; drawOverlay(); return; }
@@ -1990,11 +2068,15 @@ document.getElementById("app").addEventListener("click", async (e) => {
   if (saveT) {
     const tid = saveT.dataset.saveTrainer;
     const ids = trainerDraft[tid] || [];
+    const current = (state.trainers || []).find((item) => item.id === tid);
+    const prev = [...((current && current.groupIds) || [])];
     await api("/api/trainers/" + tid, "PATCH", { groupIds: ids });
+    pushUndo({ type: "trainer-patch", trainerId: tid, prev: { groupIds: prev } });
     delete trainerDraft[tid];
     await load();
     selectedTrainer = tid;
     view = "trainer-one";
+    showToast("Группы тренера изменены · можно отменить");
     return;
   }
 
@@ -2017,26 +2099,72 @@ document.getElementById("app").addEventListener("click", async (e) => {
 });
 
 document.getElementById("app").addEventListener("change", async (e) => {
+  const backupFile = e.target.closest("[data-restore-backup]");
+  if (backupFile && backupFile.files && backupFile.files[0]) {
+    const file = backupFile.files[0];
+    try {
+      const parsed = JSON.parse(await file.text());
+      const ok = await askConfirm({
+        title: "Восстановить базу?",
+        body: `Файл <b>${esc(file.name)}</b> полностью заменит текущих детей, семьи, посещения и оплаты. Перед заменой сервер сохранит локальную резервную копию.`,
+        confirmLabel: "Восстановить",
+        danger: true
+      });
+      if (!ok) {
+        backupFile.value = "";
+        return;
+      }
+      const res = await api("/api/backup/restore", "POST", parsed);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Не удалось восстановить базу");
+      monthId = "";
+      selectedChild = "";
+      selectedGroup = "";
+      periods = null;
+      await load();
+      showToast(`База восстановлена: детей ${data.children}, семей ${data.families}`);
+    } catch (err) {
+      alert(err instanceof SyntaxError ? "Выбранный файл содержит повреждённый JSON" : err.message);
+    } finally {
+      backupFile.value = "";
+    }
+    return;
+  }
   if (e.target.dataset.doc) {
-    await api("/api/children/" + e.target.dataset.doc, "PATCH", {
+    const childId = e.target.dataset.doc;
+    const child = state.children.find((item) => item.id === childId);
+    const prev = !!(child && child.documents && child.documents.doctor);
+    await api("/api/children/" + childId, "PATCH", {
       documents: { doctor: e.target.checked }
     });
+    pushUndo({ type: "child-patch", childId, prev: { documents: { doctor: prev } } });
     await load();
+    showToast("Справка изменена · можно отменить");
     return;
   }
   if (e.target.dataset.ins) {
-    await api("/api/children/" + e.target.dataset.ins, "PATCH", {
+    const childId = e.target.dataset.ins;
+    const child = state.children.find((item) => item.id === childId);
+    const prev = (child && child.documents && child.documents.insurance) || "";
+    await api("/api/children/" + childId, "PATCH", {
       documents: { insurance: e.target.value }
     });
+    pushUndo({ type: "child-patch", childId, prev: { documents: { insurance: prev } } });
     await load();
+    showToast("Страховка изменена · можно отменить");
     return;
   }
   if (e.target.dataset.famDiscount) {
+    const familyId = e.target.dataset.famDiscount;
+    const fam = (state.families || []).find((item) => item.id === familyId);
+    const prev = fam && fam.discountPercent != null ? fam.discountPercent : "auto";
     const val = e.target.value;
-    await api("/api/families/" + e.target.dataset.famDiscount, "PATCH", {
+    await api("/api/families/" + familyId, "PATCH", {
       discountPercent: val === "auto" ? "auto" : Number(val)
     });
+    pushUndo({ type: "family-patch", familyId, prev: { discountPercent: prev } });
     await loadPeriods();
+    showToast("Скидка изменена · можно отменить");
     return;
   }
   const file = e.target.closest("[data-qr-file]");
@@ -2176,8 +2304,11 @@ document.getElementById("overlay").addEventListener("click", async (e) => {
   if (e.target.closest("[data-save-cgroups]") && sheet) {
     const ids = sheet.selected || [];
     const childId = sheet.childId;
+    const current = state.children.find((item) => item.id === childId);
+    const prev = [...((current && current.groupIds) || [])];
     const backFamily = sheet.backFamily || null;
     await api("/api/children/" + childId, "PATCH", { groupIds: ids });
+    pushUndo({ type: "child-patch", childId, prev: { groupIds: prev } });
     await load();
     if (backFamily) {
       sheet = { ...backFamily, type: "family" };
@@ -2187,6 +2318,7 @@ document.getElementById("overlay").addEventListener("click", async (e) => {
       drawOverlay();
       render();
     }
+    showToast("Группы ребёнка изменены · можно отменить");
     return;
   }
 
@@ -2235,13 +2367,16 @@ document.getElementById("overlay").addEventListener("click", async (e) => {
       danger: true
     });
     if (!ok) return;
+    const fam = (state.families || []).find((item) => item.id === famId);
+    const prevParents = JSON.parse(JSON.stringify((fam && fam.parents) || []));
     const res = await api("/api/families/" + famId, "PATCH", { removeParentId: removeParent.dataset.removeParent });
     const data = await res.json();
     if (!res.ok) return alert(data.error);
+    pushUndo({ type: "family-patch", familyId: famId, prev: { parents: prevParents } });
     await load();
     sheet = { type: "family", childId: sheet.childId, familyId: famId, view: "home", returnView: sheet.returnView || view };
     drawOverlay();
-    showToast("Родитель убран");
+    showToast("Родитель убран · можно отменить");
     return;
   }
 
@@ -2249,9 +2384,16 @@ document.getElementById("overlay").addEventListener("click", async (e) => {
     const sel = document.querySelector("[data-assign-fam]");
     const familyId = sel ? sel.value : "";
     const returnView = sheet.returnView || view;
+    const previousChild = state.children.find((item) => item.id === sheet.childId);
+    const previousFamilyId = (previousChild && previousChild.familyId) || "";
     const res = await api("/api/children/" + sheet.childId + "/family", "POST", { familyId });
     const data = await res.json();
     if (!res.ok) return alert(data.error);
+    pushUndo({
+      type: "child-patch",
+      childId: sheet.childId,
+      prev: { familyId: previousFamilyId }
+    });
     view = returnView;
     await load();
     const child = state.children.find((c) => c.id === sheet.childId) || data.child;
@@ -2263,6 +2405,7 @@ document.getElementById("overlay").addEventListener("click", async (e) => {
       returnView
     };
     drawOverlay();
+    showToast("Семья изменена · можно отменить");
     return;
   }
 });
@@ -2279,6 +2422,8 @@ document.getElementById("overlay").addEventListener("submit", async (e) => {
   }
 
   if (e.target.id === "fam-parent-edit") {
+    const fam = (state.families || []).find((item) => item.id === famId);
+    const prevParents = JSON.parse(JSON.stringify((fam && fam.parents) || []));
     const res = await api("/api/families/" + famId, "PATCH", {
       parent: {
         id: e.target.elements.id.value,
@@ -2289,13 +2434,17 @@ document.getElementById("overlay").addEventListener("submit", async (e) => {
     });
     const data = await res.json();
     if (!res.ok) return alert(data.error || "Не удалось сохранить");
+    pushUndo({ type: "family-patch", familyId: famId, prev: { parents: prevParents } });
     view = returnView;
     await load();
     sheet = { type: "family", childId: sheet.childId, familyId: famId, view: "home", returnView };
     drawOverlay();
+    showToast("Родитель изменён · можно отменить");
     return;
   }
   if (e.target.id === "fam-parent-new") {
+    const fam = (state.families || []).find((item) => item.id === famId);
+    const prevParents = JSON.parse(JSON.stringify((fam && fam.parents) || []));
     const res = await api("/api/families/" + famId, "PATCH", {
       addParent: {
         name: e.target.elements.name.value,
@@ -2305,10 +2454,12 @@ document.getElementById("overlay").addEventListener("submit", async (e) => {
     });
     const data = await res.json();
     if (!res.ok) return alert(data.error || "Не удалось добавить");
+    pushUndo({ type: "family-patch", familyId: famId, prev: { parents: prevParents } });
     view = returnView;
     await load();
     sheet = { type: "family", childId: sheet.childId, familyId: famId, view: "home", returnView };
     drawOverlay();
+    showToast("Родитель добавлен · можно отменить");
   }
 });
 

@@ -1,12 +1,14 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const store = require("./lib/store");
 const { ROLES, visibleGroups, visibleChildren, canEditAttendance, canSeeAllGroups } = require("./lib/roles");
 const { familyPeriod, allFamilyPeriods, familyQr } = require("./lib/billing");
 
 const app = express();
 const PORT = process.env.PORT || 3780;
+const sessions = new Map();
 
 app.use(express.json({ limit: "6mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -16,11 +18,7 @@ function sendError(res, status, message) {
 }
 
 function ctx(req) {
-  return {
-    role: req.get("X-Role") || req.query.role || "parent",
-    familyId: req.get("X-Family") || req.query.family || "",
-    trainerId: req.get("X-Trainer") || req.query.trainer || ""
-  };
+  return req.auth || { role: "", familyId: "", trainerId: "" };
 }
 
 function isStaff(role) {
@@ -60,13 +58,13 @@ function publicState(db, role, familyId, trainerId, month) {
 
   const staff = isStaff(role);
   const families = staff
-    ? (db.families || []).map((f) => ({ ...f }))
+    ? (db.families || []).map((f) => stripSecrets(f, role === "director"))
     : role === "parent"
       ? (db.families || []).filter((f) => f.id === familyId).map((f) => ({ ...f }))
       : [];
 
   const trainers = staff
-    ? (db.trainers || []).map((t) => ({ ...t }))
+    ? (db.trainers || []).map((t) => stripSecrets(t, role === "director"))
     : role === "trainer"
       ? (db.trainers || []).filter((t) => t.id === trainerId).map((t) => stripSecrets(t, false))
       : [];
@@ -106,41 +104,34 @@ app.get("/api/meta", (_req, res) => {
   res.json({ roles: ROLES, devCalc: DEV_CALC });
 });
 
-app.get("/api/demo-accounts", (_req, res) => {
-  try {
-    const db = store.load();
-    const fam = (db.families || [])[0];
-    const accounts = [
-      { role: "Координатор", login: "coord", password: "coord" },
-      { role: "Руководитель", login: "boss", password: "boss" }
-    ];
-    for (const t of db.trainers || []) {
-      accounts.push({
-        role: (t.sport === "hg" ? "Тренер ХГ" : "Тренер борьба") + " · " + t.name,
-        login: t.login,
-        password: t.password
-      });
-    }
-    if (fam) {
-      accounts.push({
-        role: "Родитель · " + (fam.parentName || "семья"),
-        login: fam.login,
-        password: fam.password
-      });
-    }
-    res.json({ accounts });
-  } catch (err) {
-    sendError(res, 500, err.message);
-  }
+app.use("/api", (req, res, next) => {
+  if (req.path === "/login" || req.path === "/meta" || req.path === "/qr-map") return next();
+  const token = req.get("X-Session") || "";
+  const auth = sessions.get(token);
+  if (!auth) return sendError(res, 401, "Сессия истекла. Войдите снова");
+  req.auth = auth;
+  next();
 });
 
 app.post("/api/login", (req, res) => {
   try {
     const result = store.login(req.body && req.body.login, req.body && req.body.password);
-    res.json(result);
+    const token = crypto.randomBytes(32).toString("hex");
+    sessions.set(token, {
+      role: result.role,
+      familyId: result.familyId || "",
+      trainerId: result.trainerId || ""
+    });
+    res.json({ ...result, token });
   } catch (err) {
     sendError(res, 401, err.message);
   }
+});
+
+app.post("/api/logout", (req, res) => {
+  const token = req.get("X-Session") || "";
+  sessions.delete(token);
+  res.json({ ok: true });
 });
 
 app.get("/api/state", (req, res) => {
@@ -167,6 +158,9 @@ app.get("/api/periods", (req, res) => {
         const kids = db.children.filter((c) => c.familyId === r.family.id).map((c) => c.name).join(" ");
         return (r.family.parentName + " " + r.family.login + " " + kids).toLowerCase().includes(q);
       });
+    }
+    if (role !== "director") {
+      rows = rows.map((row) => ({ ...row, family: stripSecrets(row.family, false) }));
     }
     res.json({ month, rows });
   } catch (err) {
@@ -420,6 +414,88 @@ app.post("/api/pay/opening", (req, res) => {
     res.json(store.setOpeningSeed(familyId, openingSeed, monthId));
   } catch (err) {
     sendError(res, 400, err.message);
+  }
+});
+
+app.get("/api/backup", (req, res) => {
+  const { role } = ctx(req);
+  if (role !== "director") return sendError(res, 403, "Только руководитель может скачать резервную копию");
+  try {
+    const db = store.load();
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    res.set("Content-Type", "application/json; charset=utf-8");
+    res.set("Content-Disposition", `attachment; filename="lk-backup-${stamp}.json"`);
+    res.send(JSON.stringify(db, null, 2));
+  } catch (err) {
+    sendError(res, 500, err.message);
+  }
+});
+
+app.post("/api/backup/restore", (req, res) => {
+  const { role } = ctx(req);
+  if (role !== "director") return sendError(res, 403, "Только руководитель может восстановить базу");
+  try {
+    const db = req.body;
+    const required = ["months", "branches", "groups", "children", "families", "trainers"];
+    if (!db || typeof db !== "object" || Array.isArray(db)) {
+      return sendError(res, 400, "Файл не содержит объект JSON");
+    }
+    const missing = required.filter((key) => !Array.isArray(db[key]));
+    if (missing.length) {
+      return sendError(res, 400, "Это не резервная копия ЛК: нет " + missing.join(", "));
+    }
+    store.save(db, { backup: true });
+    const restored = store.load();
+    res.json({
+      ok: true,
+      children: restored.children.length,
+      families: restored.families.length,
+      months: restored.months.length
+    });
+  } catch (err) {
+    sendError(res, 400, "Не удалось восстановить базу: " + err.message);
+  }
+});
+
+app.get("/api/access-export", (req, res) => {
+  const { role } = ctx(req);
+  if (role !== "director") return sendError(res, 403, "Только руководитель может выгрузить доступы");
+  try {
+    const db = store.load();
+    const childrenByFamily = new Map();
+    for (const child of db.children || []) {
+      if (!child.familyId) continue;
+      const names = childrenByFamily.get(child.familyId) || [];
+      names.push(child.name);
+      childrenByFamily.set(child.familyId, names);
+    }
+    const data = {
+      exportedAt: new Date().toISOString(),
+      staff: (db.users || []).map((user) => ({
+        role: user.role,
+        name: user.name,
+        login: user.login,
+        password: user.password
+      })),
+      trainers: (db.trainers || []).map((item) => ({
+        name: item.name,
+        sport: item.sport,
+        login: item.login,
+        password: item.password
+      })),
+      families: (db.families || []).map((item) => ({
+        family: item.parentName,
+        children: childrenByFamily.get(item.id) || [],
+        login: item.login,
+        password: item.password
+      }))
+    };
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.set("Content-Type", "application/json; charset=utf-8");
+    res.set("Content-Disposition", `attachment; filename="lk-access-${stamp}.json"`);
+    res.send(JSON.stringify(data, null, 2));
+  } catch (err) {
+    sendError(res, 500, err.message);
   }
 });
 
