@@ -1165,7 +1165,8 @@ function sickView() {
     }).join("");
     return `
       <button class="btn ghost" type="button" data-clear-sick>← Поиск</button>
-      <h2>${esc(child ? child.name : "")}</h2>
+      ${monthSwitch()}
+      <h2>${esc(child ? child.name : "")} · ${esc(state.month.label)}</h2>
       <p class="hint">Отметьте дни болезни — буква Б появится во всех группах ребёнка на эти даты.</p>
       <div class="month-grid">${WEEK_ORDER.map((w) => `<span class="dow">${WEEK_SHORT[w]}</span>`).join("")}${cells}</div>`;
   }
