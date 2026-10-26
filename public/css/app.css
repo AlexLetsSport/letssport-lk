@@ -979,6 +979,38 @@ input, select {
   align-self: flex-start;
 }
 .period-tabs { flex-wrap: wrap; }
+.billing-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.billing-cal-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+  color: var(--navy);
+}
+.billing-cal-day.is-on {
+  background: var(--navy);
+  color: #fff;
+  border-color: var(--navy);
+}
+.billing-cal-day-num {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+}
+.billing-cal-day-label {
+  font-size: 12px;
+  opacity: .85;
+}
 .group-lines {
   display: grid;
   gap: 8px;

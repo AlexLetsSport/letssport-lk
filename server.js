@@ -417,6 +417,17 @@ app.post("/api/pay/opening", (req, res) => {
   }
 });
 
+app.post("/api/settings/billing-start", (req, res) => {
+  const { role } = ctx(req);
+  if (role !== "director") return sendError(res, 403, "Только руководитель");
+  try {
+    const monthId = req.body && "monthId" in req.body ? req.body.monthId : null;
+    res.json(store.setBillingStartMonth(monthId));
+  } catch (err) {
+    sendError(res, 400, err.message);
+  }
+});
+
 app.get("/api/backup", (req, res) => {
   const { role } = ctx(req);
   if (role !== "director") return sendError(res, 403, "Только руководитель может скачать резервную копию");

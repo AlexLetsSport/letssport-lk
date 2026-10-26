@@ -672,11 +672,26 @@ function periodPhaseLabel(phase) {
 
 function monthSwitch() {
   if (!state.months || !state.months.length) return "";
-  return `<div class="subtabs period-tabs">${state.months.map((m) => {
+  const closed = [];
+  const open = [];
+  for (const m of state.months) {
+    if (periodPhase(m) === "closed") closed.push(m);
+    else open.push(m);
+  }
+  const selectedId = state.month && state.month.id;
+  const viewingClosed = closed.find((m) => m.id === selectedId);
+  const tabs = open.map((m) => {
     const phase = periodPhase(m);
-    const tag = phase === "closed" ? " · завершён" : phase === "current" ? " · сейчас" : "";
-    return `<button type="button" class="${state.month.id === m.id ? "" : "is-off"}" data-month="${m.id}">${esc(m.label)}${tag}</button>`;
-  }).join("")}</div>`;
+    const tag = phase === "current" ? " · сейчас" : "";
+    return `<button type="button" class="${selectedId === m.id ? "" : "is-off"}" data-month="${m.id}">${esc(m.label)}${tag}</button>`;
+  });
+  if (viewingClosed) {
+    tabs.push(`<button type="button" data-month="${viewingClosed.id}">${esc(viewingClosed.label)} · завершён</button>`);
+  }
+  if (closed.length) {
+    tabs.push(`<button type="button" class="is-off" data-closed-months>Завершённые периоды</button>`);
+  }
+  return `<div class="subtabs period-tabs">${tabs.join("")}</div>`;
 }
 
 function parentPeriodBanner() {
@@ -1404,10 +1419,17 @@ function parentsCalcView() {
       ${showDirFormula === r.family.id ? formulaHtml(p) : ""}
     </article>`;
   }).join("");
+  const startId = (state.settings && state.settings.billingStartMonth) || "";
+  const startMonth = (state.months || []).find((m) => m.id === startId);
+  const startHint = startMonth
+    ? `Расчёты с <b>1 ${esc(startMonth.label)}</b> — более ранние периоды на остаток не влияют.`
+    : "Точка отсчёта не задана — цепочка идёт с самого первого периода в учёте.";
   return `
     <article class="child-card">
       <h2>Родители · ${esc(monthLabel)}</h2>
-      <p class="hint">Стартовый остаток на начало месяца (ручной ввод) — если учёт начинается с сентября. Автоперенос дальше: только «Б» до 4 занятий, аванс сам не переносится.</p>
+      <p class="hint">${startHint}</p>
+      <button class="btn" type="button" data-billing-start>Смена начальной даты расчётов</button>
+      <p class="hint">Стартовый остаток на начало месяца (ручной ввод по семье). Автоперенос дальше: только «Б» до 4 занятий, аванс сам не переносится.</p>
       <p class="hint">Скидка многодетных: авто 2 ребёнка = 10%, 3+ = 20%, либо вручную 0 / 10 / 20.</p>
     </article>
     <input class="search-input" data-par-q placeholder="Поиск семьи или ребёнка" value="${esc(qParents)}">
@@ -1433,6 +1455,55 @@ function drawOverlay() {
     return;
   }
   el.className = "overlay-on";
+  if (sheet.type === "billing-start") {
+    const startId = (state.settings && state.settings.billingStartMonth) || "";
+    const months = (state.months || []).slice().sort((a, b) => (a.year - b.year) || (a.month - b.month));
+    const byYear = {};
+    for (const m of months) {
+      if (!byYear[m.year]) byYear[m.year] = [];
+      byYear[m.year].push(m);
+    }
+    const yearsHtml = Object.keys(byYear).sort().map((year) => `
+      <p class="sheet-section">${esc(year)}</p>
+      <div class="billing-cal-grid">
+        ${byYear[year].map((m) => `
+          <button type="button" class="billing-cal-day ${startId === m.id ? "is-on" : ""}" data-set-billing-start="${m.id}">
+            <span class="billing-cal-day-num">1</span>
+            <span class="billing-cal-day-label">${esc(MONTH_NAMES[m.month - 1])}</span>
+          </button>
+        `).join("")}
+      </div>
+    `).join("");
+    el.innerHTML = `
+      <div class="sheet" role="dialog">
+        <p class="sheet-kicker">Начальная дата расчётов</p>
+        <p class="hint">Выберите месяц — расчёты начнутся с <b>1-го числа</b>. Периоды раньше не влияют на остатки и счета.</p>
+        ${yearsHtml || `<p class="hint">Нет открытых периодов</p>`}
+        <button type="button" class="btn ghost" data-clear-billing-start>Сбросить (с первого периода)</button>
+        <button type="button" class="btn ghost sheet-cancel" data-close-sheet>Закрыть</button>
+      </div>`;
+    return;
+  }
+  if (sheet.type === "closed-months") {
+    const closed = (state.months || [])
+      .filter((m) => periodPhase(m) === "closed")
+      .slice()
+      .reverse();
+    el.innerHTML = `
+      <div class="sheet" role="dialog">
+        <p class="sheet-kicker">Завершённые периоды</p>
+        <p class="hint">Выберите месяц, чтобы открыть посещаемость и расчёт</p>
+        <div class="sheet-list">
+          ${closed.map((m) => `
+            <button type="button" class="sheet-item ${state.month && state.month.id === m.id ? "is-on" : ""}" data-month="${m.id}">
+              <span class="sheet-item-title">${esc(m.label)}</span>
+            </button>
+          `).join("") || `<p class="hint">Нет завершённых периодов</p>`}
+        </div>
+        <button type="button" class="btn ghost sheet-cancel" data-close-sheet>Закрыть</button>
+      </div>`;
+    return;
+  }
   if (sheet.type === "groups") {
     const q = (sheet.q || "").toLowerCase();
     const items = state.groups.filter((g) => (g.title || g.name).toLowerCase().includes(q));
@@ -1691,9 +1762,20 @@ document.getElementById("app").addEventListener("click", async (e) => {
   }
   const cal = e.target.closest("[data-cal]");
   if (cal) { calMode = cal.dataset.cal; persistCal(); render(); return; }
+  if (e.target.closest("[data-closed-months]")) {
+    sheet = { type: "closed-months" };
+    drawOverlay();
+    return;
+  }
+  if (e.target.closest("[data-billing-start]")) {
+    sheet = { type: "billing-start" };
+    drawOverlay();
+    return;
+  }
   const monthBtn = e.target.closest("[data-month]");
   if (monthBtn) {
     monthId = monthBtn.dataset.month;
+    sheet = null;
     await load();
     if (role === "director" && dirTab === "calc" && calcTab === "parents") await loadPeriods();
     return;
@@ -2284,6 +2366,42 @@ document.getElementById("app").addEventListener("submit", async (e) => {
 document.getElementById("overlay").addEventListener("click", async (e) => {
   if (e.target.id === "overlay" || e.target.closest("[data-close-sheet]")) {
     sheet = null; drawOverlay(); return;
+  }
+  const setBilling = e.target.closest("[data-set-billing-start]");
+  if (setBilling && sheet && sheet.type === "billing-start") {
+    try {
+      await api("/api/settings/billing-start", "POST", { monthId: setBilling.dataset.setBillingStart });
+      sheet = null;
+      drawOverlay();
+      await load();
+      if (role === "director" && dirTab === "calc" && calcTab === "parents") await loadPeriods();
+      showToast("Точка отсчёта расчётов обновлена");
+    } catch (err) {
+      alert(err.message);
+    }
+    return;
+  }
+  if (e.target.closest("[data-clear-billing-start]") && sheet && sheet.type === "billing-start") {
+    try {
+      await api("/api/settings/billing-start", "POST", { monthId: null });
+      sheet = null;
+      drawOverlay();
+      await load();
+      if (role === "director" && dirTab === "calc" && calcTab === "parents") await loadPeriods();
+      showToast("Точка отсчёта сброшена");
+    } catch (err) {
+      alert(err.message);
+    }
+    return;
+  }
+  const closedMonth = e.target.closest("[data-month]");
+  if (closedMonth && sheet && sheet.type === "closed-months") {
+    monthId = closedMonth.dataset.month;
+    sheet = null;
+    drawOverlay();
+    await load();
+    if (role === "director" && dirTab === "calc" && calcTab === "parents") await loadPeriods();
+    return;
   }
   const g = e.target.closest("[data-pick-group]");
   if (g) { selectedGroup = g.dataset.pickGroup; sheet = null; render(); return; }
